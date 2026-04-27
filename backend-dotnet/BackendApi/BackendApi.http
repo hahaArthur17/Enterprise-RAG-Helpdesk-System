@@ -1,6 +1,17 @@
+# Define variables: the base address and port of the server
 @BackendApi_HostAddress = http://localhost:5263
 
-GET {{BackendApi_HostAddress}}/weatherforecast/
+### Test 1: Check health status (GET request)
+GET {{BackendApi_HostAddress}}/api/health
 Accept: application/json
 
-###
+### -------------------------------------------
+# Note: ### is used to separate different requests, do not omit it
+
+### Test 2: Send a chat message (POST request)
+POST {{BackendApi_HostAddress}}/api/chat
+Content-Type: application/json
+
+{
+  "message": "Hello .NET, this is from HTTP file!"
+}

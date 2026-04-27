@@ -1,23 +1,31 @@
 var builder = WebApplication.CreateBuilder(args);
 
-// add services to the container
+// --- Add services to the container (Dependency Injection) ---
+
+// Register controllers so the application knows they exist
 builder.Services.AddControllers();
-builder.Services.AddEndpointsApiExplorer();
-builder.Services.AddSwaggerGen();
+
+// Configure CORS (Cross-Origin Resource Sharing) to allow frontend requests
+builder.Services.AddCors(options =>
+{
+    options.AddPolicy("AllowFrontend", policy =>
+    {
+        // Allow the React frontend running on Vite's default port
+        policy.WithOrigins("http://localhost:5173")
+              .AllowAnyHeader()
+              .AllowAnyMethod();
+    });
+});
 
 var app = builder.Build();
 
-// open Swagger
-if (app.Environment.IsDevelopment())
-{
-    app.UseSwagger();
-    app.UseSwaggerUI();
-}
+// --- Configure the HTTP request pipeline (Middleware) ---
 
-app.UseHttpsRedirection();
+// Enable the CORS policy defined above
+app.UseCors("AllowFrontend");
 
-app.UseAuthorization();
-
+// Map controller routes to the request pipeline
 app.MapControllers();
 
+// Start the application
 app.Run();
