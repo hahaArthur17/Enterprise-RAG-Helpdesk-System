@@ -10,56 +10,76 @@ namespace BackendApi.Controllers
     public class ChatController : ControllerBase
     {
         private readonly IHttpClientFactory _httpClientFactory;
+        // NEW: Inject ILogger for structured logging
+        private readonly ILogger<ChatController> _logger;
 
-        // Inject IHttpClientFactory via constructor
-        public ChatController(IHttpClientFactory httpClientFactory)
+        public ChatController(IHttpClientFactory httpClientFactory, ILogger<ChatController> logger)
         {
             _httpClientFactory = httpClientFactory;
+            _logger = logger;
         }
 
         [HttpPost]
         public async Task<IActionResult> SendMessage([FromBody] ChatRequest request)
         {
-            // 1. Validate incoming request
+            // Log the incoming request
+            _logger.LogInformation("Received message request. Content length: {Length}", request.Message?.Length ?? 0);
+
             if (string.IsNullOrWhiteSpace(request.Message))
             {
+                _logger.LogWarning("Validation failed: Received an empty message.");
                 return BadRequest(new { error = "Message cannot be empty" });
             }
 
-            // 2. Prepare the JSON payload for the Python AI Service
-            // Python expects: { "question": "..." }
-            var pythonPayload = new { question = request.Message };
-            var jsonPayload = JsonSerializer.Serialize(pythonPayload);
-            var httpContent = new StringContent(jsonPayload, Encoding.UTF8, "application/json");
-
-            // 3. Make the HTTP POST request to the Python service
-            var client = _httpClientFactory.CreateClient();
-            
-            // NOTE: Make sure Python is running on port 8000
-            var pythonResponse = await client.PostAsync("http://localhost:8000/ask", httpContent);
-
-            if (!pythonResponse.IsSuccessStatusCode)
+            try
             {
-                // Handle errors if Python service is down or returns an error
-                return StatusCode(500, new { error = "Failed to communicate with AI service" });
+                var pythonPayload = new { question = request.Message };
+                var jsonPayload = JsonSerializer.Serialize(pythonPayload);
+                var httpContent = new StringContent(jsonPayload, Encoding.UTF8, "application/json");
+
+                var client = _httpClientFactory.CreateClient();
+                
+                _logger.LogInformation("Sending request to Python AI Service...");
+                
+                // NOTE: If Python service is down, this might throw an HttpRequestException
+                var pythonResponse = await client.PostAsync("http://localhost:8000/ask", httpContent);
+
+                // Handle non-200 HTTP responses from Python
+                if (!pythonResponse.IsSuccessStatusCode)
+                {
+                    _logger.LogError("Python AI Service returned an error. Status Code: {StatusCode}", pythonResponse.StatusCode);
+                    return StatusCode(500, new { error = "Failed to communicate with AI service." });
+                }
+
+                var responseString = await pythonResponse.Content.ReadAsStringAsync();
+                
+                // Safely parse JSON
+                using var jsonDocument = JsonDocument.Parse(responseString);
+                var aiAnswer = jsonDocument.RootElement.GetProperty("answer").GetString();
+
+                _logger.LogInformation("Successfully received response from Python AI Service.");
+
+                var finalResponse = new ChatResponse
+                {
+                    Id = Guid.NewGuid().ToString(),
+                    Role = "assistant",
+                    Content = aiAnswer ?? "Error: No answer received from AI."
+                };
+
+                return Ok(finalResponse);
             }
-
-            // 4. Parse the response from Python
-            var responseString = await pythonResponse.Content.ReadAsStringAsync();
-            using var jsonDocument = JsonDocument.Parse(responseString);
-            
-            // Extract the "answer" field from the Python JSON response
-            var aiAnswer = jsonDocument.RootElement.GetProperty("answer").GetString();
-
-            // 5. Construct the final response format for the React frontend
-            var finalResponse = new ChatResponse
+            // Catch specific network exceptions
+            catch (HttpRequestException httpEx)
             {
-                Id = Guid.NewGuid().ToString(),
-                Role = "assistant",
-                Content = aiAnswer ?? "Error: No answer received from AI."
-            };
-
-            return Ok(finalResponse);
+                _logger.LogError(httpEx, "Network error occurred while connecting to Python AI Service.");
+                return StatusCode(503, new { error = "AI Service is currently unavailable." });
+            }
+            // Catch any other unexpected exceptions (e.g., JSON parsing errors)
+            catch (Exception ex)
+            {
+                _logger.LogCritical(ex, "An unexpected error occurred in the ChatController.");
+                return StatusCode(500, new { error = "An internal server error occurred." });
+            }
         }
     }
 }
