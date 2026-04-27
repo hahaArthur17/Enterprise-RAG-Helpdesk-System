@@ -5,6 +5,9 @@ var builder = WebApplication.CreateBuilder(args);
 // Register controllers so the application knows they exist
 builder.Services.AddControllers();
 
+// Register IHttpClientFactory so controllers can make external HTTP calls
+builder.Services.AddHttpClient();
+
 // Configure CORS (Cross-Origin Resource Sharing) to allow frontend requests
 builder.Services.AddCors(options =>
 {

@@ -1,21 +1,21 @@
 import { useState } from 'react';
-// FIX: Use 'import type' for TypeScript interfaces to prevent Vite/esbuild runtime errors
 import type { Message } from './types/chat';
 import './App.css';
 
 function App() {
-  // Initialize state with a greeting message
   const [messages, setMessages] = useState<Message[]>([
     { id: '1', role: 'assistant', content: 'Hello! I am your Enterprise Helpdesk Assistant. How can I help you today?' }
   ]);
   const [input, setInput] = useState('');
+  
+  // NEW: State to track if we are waiting for an API response
+  const [isLoading, setIsLoading] = useState(false);
 
-  // Handle the logic for sending a message
-  const handleSend = () => {
-    // Prevent empty submissions
-    if (!input.trim()) return;
+  // Changed to an async function to handle network requests
+  const handleSend = async () => {
+    if (!input.trim() || isLoading) return;
 
-    // 1. Append the user's message to the chat
+    // 1. Instantly display user's message
     const userMessage: Message = {
       id: Date.now().toString(),
       role: 'user',
@@ -23,20 +23,49 @@ function App() {
     };
     
     setMessages((prev) => [...prev, userMessage]);
-    setInput(''); // Clear the input field
+    setInput('');
+    setIsLoading(true); // Disable input and show loading indicator
 
-    // 2. Mock AI response (To be replaced with real API call in Day 5)
-    setTimeout(() => {
+    try {
+      // 2. Make the actual HTTP call to the .NET Backend
+      // NOTE: Verify that your .NET service is running on port 5263!
+      const response = await fetch('http://localhost:5263/api/chat', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ message: userMessage.content }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Server error: ${response.status}`);
+      }
+
+      // 3. Parse the JSON response from .NET and display it
+      const data = await response.json();
       const aiMessage: Message = {
-        id: (Date.now() + 1).toString(),
-        role: 'assistant',
-        content: 'This is a mocked AI response. We will connect this to the real .NET API later.',
+        id: data.id,
+        role: data.role,
+        content: data.content, // This content now originates from Python!
       };
+      
       setMessages((prev) => [...prev, aiMessage]);
-    }, 1000);
+
+    } catch (error) {
+      console.error("Failed to connect to the backend:", error);
+      
+      // Fallback message if network fails
+      const errorMessage: Message = {
+        id: Date.now().toString(),
+        role: 'assistant',
+        content: '[System Error] Failed to connect to the server. Is .NET running?',
+      };
+      setMessages((prev) => [...prev, errorMessage]);
+    } finally {
+      setIsLoading(false); // Re-enable input
+    }
   };
 
-  // Allow sending message by pressing the 'Enter' key
   const handleKeyPress = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') {
       handleSend();
@@ -49,7 +78,6 @@ function App() {
         <h2>Enterprise RAG Helpdesk</h2>
       </header>
 
-      {/* Chat message history area */}
       <div className="message-list">
         {messages.map((msg) => (
           <div key={msg.id} className={`message-wrapper ${msg.role}`}>
@@ -58,9 +86,17 @@ function App() {
             </div>
           </div>
         ))}
+        
+        {/* NEW: Simple loading indicator */}
+        {isLoading && (
+          <div className="message-wrapper assistant">
+            <div className="message-bubble assistant">
+              <em>Thinking...</em>
+            </div>
+          </div>
+        )}
       </div>
 
-      {/* Input area */}
       <div className="input-area">
         <input
           type="text"
@@ -69,8 +105,13 @@ function App() {
           onKeyDown={handleKeyPress}
           placeholder="Type your question here..."
           className="chat-input"
+          disabled={isLoading} // Prevent typing while waiting
         />
-        <button onClick={handleSend} className="send-button">
+        <button 
+          onClick={handleSend} 
+          className="send-button" 
+          disabled={isLoading} // Prevent multiple clicks
+        >
           Send
         </button>
       </div>
