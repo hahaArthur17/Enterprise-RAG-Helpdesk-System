@@ -4,11 +4,13 @@ using BackendApi.Models;
 using Microsoft.AspNetCore.Mvc;
 using Npgsql;
 using Microsoft.Extensions.Configuration;
+using Microsoft.AspNetCore.Authorization;
 
 namespace BackendApi.Controllers
 {
     [ApiController]
     [Route("api/[controller]")]
+    [Authorize]
     public class ChatController : ControllerBase
     {
         private readonly IHttpClientFactory _httpClientFactory;

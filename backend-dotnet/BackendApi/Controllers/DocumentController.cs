@@ -1,10 +1,12 @@
 using System.Net.Http.Headers;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Authorization;
 
 namespace BackendApi.Controllers
 {
     [ApiController]
     [Route("api/[controller]")]
+    [Authorize]
     public class DocumentController : ControllerBase
     {
         private readonly IHttpClientFactory _httpClientFactory;

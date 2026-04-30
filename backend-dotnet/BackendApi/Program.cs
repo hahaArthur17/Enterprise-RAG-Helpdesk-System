@@ -1,40 +1,64 @@
 using DotNetEnv;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.IdentityModel.Tokens;
+using System.Text;
 
-Env.Load(); // Load environment variables from .env file
+// 1. Load environment variables from .env file FIRST
+Env.Load();
 
 var builder = WebApplication.CreateBuilder(args);
 
+// 2. Instruct .NET to read configurations from environment variables
 builder.Configuration.AddEnvironmentVariables();
 
 // --- Add services to the container (Dependency Injection) ---
 
-// Register controllers so the application knows they exist
 builder.Services.AddControllers();
-
-// Register IHttpClientFactory so controllers can make external HTTP calls
 builder.Services.AddHttpClient();
 
-// Configure CORS (Cross-Origin Resource Sharing) to allow frontend requests
+// 3. Configure CORS (Cross-Origin Resource Sharing)
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("AllowFrontend", policy =>
     {
-        // Allow the React frontend running on Vite's default port
+        // Allow the React frontend to communicate with this API
         policy.WithOrigins("http://localhost:5173")
               .AllowAnyHeader()
               .AllowAnyMethod();
     });
 });
 
+// 4. Configure JWT Authentication [DAY 14]
+// Safely retrieve the secret key from the .env file
+var jwtSecretKey = builder.Configuration["JWT_SECRET_KEY"] 
+                   ?? throw new InvalidOperationException("JWT Secret Key is missing in .env file.");
+
+builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+    .AddJwtBearer(options =>
+    {
+        options.TokenValidationParameters = new TokenValidationParameters
+        {
+            ValidateIssuer = true,
+            ValidateAudience = true,
+            ValidateLifetime = true,
+            ValidateIssuerSigningKey = true,
+            ValidIssuer = builder.Configuration["Jwt:Issuer"], // From appsettings.json
+            ValidAudience = builder.Configuration["Jwt:Audience"], // From appsettings.json
+            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtSecretKey))
+        };
+    });
+
 var app = builder.Build();
 
 // --- Configure the HTTP request pipeline (Middleware) ---
 
-// Enable the CORS policy defined above
+// 5. Enable CORS (Must be placed before Auth)
 app.UseCors("AllowFrontend");
 
-// Map controller routes to the request pipeline
+// 6. Enable Authentication & Authorization (Order is critical!)
+app.UseAuthentication(); // "Who are you?"
+app.UseAuthorization();  // "Are you allowed to be here?"
+
 app.MapControllers();
 
-// Start the application
 app.Run();
