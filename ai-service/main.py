@@ -11,6 +11,7 @@ from dotenv import load_dotenv
 from groq import AsyncGroq
 from supabase import create_client, Client
 from sentence_transformers import SentenceTransformer
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 # 1. Setup Logging and Environment
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
@@ -93,8 +94,8 @@ async def ask_ai(request: AskRequest):
             "match_documents",
             {
                 "query_embedding": question_embedding,
-                "match_threshold": 0.3, # Adjust threshold based on accuracy needs
-                "match_count": 3        # Top 3 most relevant chunks
+                "match_threshold": 0.2, # Lower threshold slightly for better recall
+                "match_count": 5        # [DAY 12]: Increase Top-K to 5 chunks
             }
         ).execute()
 
@@ -112,10 +113,12 @@ async def ask_ai(request: AskRequest):
 
         # Build the dynamic System Prompt
         system_prompt = f"""
-        You are an intelligent enterprise support assistant. 
-        Use ONLY the following retrieved Context to answer the User Question. 
-        If the answer is not contained in the Context, say "I don't have enough internal information to answer that." 
-        Do not make up facts.
+        You are an elite enterprise AI assistant.
+        
+        INSTRUCTIONS:
+        1. Answer the user's question strictly using the CONTEXT provided below.
+        2. If the CONTEXT does not contain the answer, reply EXACTLY with: "I do not have enough internal information to answer this question." Do not guess or use outside knowledge.
+        3. Format your response cleanly using markdown if necessary (bullet points, bold text).
         
         --- Context ---
         {context_text}
@@ -179,51 +182,48 @@ def ingest_knowledge(request: IngestRequest):
         logger.error(f"Error during ingestion process: {str(e)}")
         raise HTTPException(status_code=500, detail="Failed to embed and store data.")
 
-# [DAY 10]: Upload & Parse PDF
+# [DAY 12]: Refined Upload with Chunking
 @app.post("/upload", response_model=IngestResponse)
 async def upload_document(file: UploadFile = File(...)):
     """
-    Receives a PDF file, extracts text, converts to vector, and stores in Supabase.
+    Parses PDF, splits text into sensible chunks, and embeds each chunk separately.
     """
-    logger.info(f"Received file: {file.filename}")
-    
+    logger.info(f"Received file for chunking: {file.filename}")
     if not file.filename.endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF files are supported.")
 
     try:
-        # 1. Read the PDF file in memory
         pdf_bytes = await file.read()
         pdf_reader = PdfReader(io.BytesIO(pdf_bytes))
         
-        # 2. Extract text from all pages
-        extracted_text = ""
-        for page in pdf_reader.pages:
-            text = page.extract_text()
-            if text:
-                extracted_text += text + "\n"
-                
+        extracted_text = "".join([page.extract_text() or "" for page in pdf_reader.pages])
         if not extracted_text.strip():
-            raise HTTPException(status_code=400, detail="No readable text found in PDF.")
+            raise HTTPException(status_code=400, detail="No readable text found.")
 
-        # 3. Simple chunking (In production, use LangChain's RecursiveCharacterTextSplitter)
-        # For Day 10, we embed the whole extracted text (up to model limit)
-        logger.info("Extracting text and generating embeddings...")
-        vector_embedding = embedding_model.encode(extracted_text).tolist()
-
-        # 4. Store in vector database
-        data, count = supabase.table("documents").insert({
-            "content": extracted_text,
-            "embedding": vector_embedding
-        }).execute()
+        # 1. Initialize the Text Splitter
+        # chunk_size: max characters per chunk. chunk_overlap: overlap to keep context flow.
+        text_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=500,
+            chunk_overlap=50,
+            separators=["\n\n", "\n", ".", " ", ""]
+        )
         
-        inserted_id = data[1][0]['id']
-        logger.info(f"Successfully processed PDF. Document ID: {inserted_id}")
+        # 2. Split the text into manageable chunks
+        chunks = text_splitter.split_text(extracted_text)
+        logger.info(f"Document split into {len(chunks)} chunks.")
+
+        # 3. Embed and store each chunk
+        for chunk in chunks:
+            vector_embedding = embedding_model.encode(chunk).tolist()
+            supabase.table("documents").insert({
+                "content": chunk,
+                "embedding": vector_embedding
+            }).execute()
 
         return IngestResponse(
-            message=f"File '{file.filename}' successfully processed and stored.",
-            document_id=inserted_id
+            message=f"File processed. Created {len(chunks)} embedded chunks.",
+            document_id=0 # 0 indicates multiple chunks were inserted
         )
-
     except Exception as e:
         logger.error(f"Error processing file: {str(e)}")
         raise HTTPException(status_code=500, detail="Failed to process document.")
