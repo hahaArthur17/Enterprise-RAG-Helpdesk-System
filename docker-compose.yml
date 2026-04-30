@@ -1,0 +1,64 @@
+# docker-compose.yml
+version: '3.8'
+
+services:
+  # 1. Frontend UI (React + Nginx)
+  frontend:
+    build: 
+      context: ./frontend
+    ports:
+      - "5173:80" # Maps local 5173 to container's Nginx port 80
+    depends_on:
+      - backend
+    networks:
+      - rag-network
+
+  # 2. Backend API (.NET)
+  backend:
+    build:
+      context: ./backend-dotnet/BackendApi
+    ports:
+      - "5263:8080" # Maps local 5263 to container's 8080
+    env_file:
+      - ./backend-dotnet/BackendApi/.env # Loads Supabase & JWT keys
+    environment:
+      # Overrides localhost to use the internal Docker network name
+      - AI_SERVICE_URL=http://ai-service:8000 
+    depends_on:
+      - ai-service
+    networks:
+      - rag-network
+
+  # 3. AI Microservice (Python)
+  ai-service:
+    build:
+      context: ./ai-service
+    ports:
+      - "8000:8000"
+    env_file:
+      - ./ai-service/.env # Loads Groq & Supabase keys
+    networks:
+      - rag-network
+
+  # 4. Local Vector Database (Optional local alternative to Supabase)
+  postgres:
+    image: ankane/pgvector:latest
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: localpassword
+      POSTGRES_DB: rag_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks:
+      - rag-network
+
+# Define isolated network for the microservices
+networks:
+  rag-network:
+    driver: bridge
+
+# Persist database data even if container goes down
+volumes:
+  pgdata:
