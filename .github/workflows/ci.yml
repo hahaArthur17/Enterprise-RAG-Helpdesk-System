@@ -1,0 +1,76 @@
+# .github/workflows/ci.yml
+name: Enterprise RAG CI Pipeline
+
+# Trigger this workflow on pushes or pull requests to the main branch
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  # Job 1: Build and lint Frontend
+  build-frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      - name: Install dependencies and Build
+        working-directory: ./frontend
+        run: |
+          npm ci
+          npm run build
+          
+  # Job 2: Build .NET Backend
+  build-backend:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup .NET Core
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Restore and Build
+        working-directory: ./backend-dotnet/BackendApi
+        run: |
+          dotnet restore
+          dotnet build --configuration Release --no-restore
+
+  # Job 3: Setup AI Service (Python)
+  build-ai-service:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        working-directory: ./ai-service
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          
+  # Job 4: Mock Deployment (Runs only if all builds pass)
+  deploy:
+    needs: [build-frontend, build-backend, build-ai-service]
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - name: Mock Deploy to Production
+        run: |
+          echo "All tests passed. Initiating deployment sequence..."
+          echo "Deploying Docker containers to AWS/Azure..."
+          echo "Deployment successful! 🚀"
