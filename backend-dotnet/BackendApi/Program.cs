@@ -1,4 +1,10 @@
+using DotNetEnv;
+
+Env.Load(); // Load environment variables from .env file
+
 var builder = WebApplication.CreateBuilder(args);
+
+builder.Configuration.AddEnvironmentVariables();
 
 // --- Add services to the container (Dependency Injection) ---
 

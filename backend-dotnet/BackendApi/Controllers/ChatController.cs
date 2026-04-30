@@ -2,6 +2,8 @@ using System.Text;
 using System.Text.Json;
 using BackendApi.Models;
 using Microsoft.AspNetCore.Mvc;
+using Npgsql;
+using Microsoft.Extensions.Configuration;
 
 namespace BackendApi.Controllers
 {
@@ -10,76 +12,65 @@ namespace BackendApi.Controllers
     public class ChatController : ControllerBase
     {
         private readonly IHttpClientFactory _httpClientFactory;
-        // NEW: Inject ILogger for structured logging
         private readonly ILogger<ChatController> _logger;
+        private readonly string _connectionString;
 
-        public ChatController(IHttpClientFactory httpClientFactory, ILogger<ChatController> logger)
+        public ChatController(IHttpClientFactory httpClientFactory, ILogger<ChatController> logger, IConfiguration configuration)
         {
             _httpClientFactory = httpClientFactory;
             _logger = logger;
+            _connectionString = configuration["SUPABASE_DB_CONNECTION"] 
+                                ?? throw new InvalidOperationException("DB Connection string not found in .env");
         }
 
         [HttpPost]
         public async Task<IActionResult> SendMessage([FromBody] ChatRequest request)
         {
-            // Log the incoming request
-            _logger.LogInformation("Received message request. Content length: {Length}", request.Message?.Length ?? 0);
+            if (string.IsNullOrWhiteSpace(request.Message)) return BadRequest(new { error = "Message empty" });
 
-            if (string.IsNullOrWhiteSpace(request.Message))
-            {
-                _logger.LogWarning("Validation failed: Received an empty message.");
-                return BadRequest(new { error = "Message cannot be empty" });
-            }
+            // Hardcode a session ID for now (Day 14 will attach it to users)
+            string sessionId = "session_123";
 
             try
             {
+                // [DAY 13]: Save User Message to DB
+                await SaveMessageToDb(sessionId, "user", request.Message);
+
+                // Call Python AI Service
                 var pythonPayload = new { question = request.Message };
                 var jsonPayload = JsonSerializer.Serialize(pythonPayload);
                 var httpContent = new StringContent(jsonPayload, Encoding.UTF8, "application/json");
 
                 var client = _httpClientFactory.CreateClient();
-                
-                _logger.LogInformation("Sending request to Python AI Service...");
-                
-                // NOTE: If Python service is down, this might throw an HttpRequestException
                 var pythonResponse = await client.PostAsync("http://localhost:8000/ask", httpContent);
-
-                // Handle non-200 HTTP responses from Python
-                if (!pythonResponse.IsSuccessStatusCode)
-                {
-                    _logger.LogError("Python AI Service returned an error. Status Code: {StatusCode}", pythonResponse.StatusCode);
-                    return StatusCode(500, new { error = "Failed to communicate with AI service." });
-                }
+                pythonResponse.EnsureSuccessStatusCode();
 
                 var responseString = await pythonResponse.Content.ReadAsStringAsync();
-                
-                // Safely parse JSON
                 using var jsonDocument = JsonDocument.Parse(responseString);
-                var aiAnswer = jsonDocument.RootElement.GetProperty("answer").GetString();
+                var aiAnswer = jsonDocument.RootElement.GetProperty("answer").GetString() ?? "Error";
 
-                _logger.LogInformation("Successfully received response from Python AI Service.");
+                // [DAY 13]: Save AI Assistant Message to DB
+                await SaveMessageToDb(sessionId, "assistant", aiAnswer);
 
-                var finalResponse = new ChatResponse
-                {
-                    Id = Guid.NewGuid().ToString(),
-                    Role = "assistant",
-                    Content = aiAnswer ?? "Error: No answer received from AI."
-                };
-
-                return Ok(finalResponse);
+                return Ok(new ChatResponse { Id = Guid.NewGuid().ToString(), Role = "assistant", Content = aiAnswer });
             }
-            // Catch specific network exceptions
-            catch (HttpRequestException httpEx)
-            {
-                _logger.LogError(httpEx, "Network error occurred while connecting to Python AI Service.");
-                return StatusCode(503, new { error = "AI Service is currently unavailable." });
-            }
-            // Catch any other unexpected exceptions (e.g., JSON parsing errors)
             catch (Exception ex)
             {
-                _logger.LogCritical(ex, "An unexpected error occurred in the ChatController.");
-                return StatusCode(500, new { error = "An internal server error occurred." });
+                _logger.LogError(ex, "Chat processing failed.");
+                return StatusCode(500, new { error = "Internal server error." });
             }
+        }
+
+        // Helper method to execute SQL insert
+        private async Task SaveMessageToDb(string sessionId, string role, string content)
+        {
+            await using var conn = new NpgsqlConnection(_connectionString);
+            await conn.OpenAsync();
+            await using var cmd = new NpgsqlCommand("INSERT INTO chat_messages (session_id, role, content) VALUES (@s, @r, @c)", conn);
+            cmd.Parameters.AddWithValue("s", sessionId);
+            cmd.Parameters.AddWithValue("r", role);
+            cmd.Parameters.AddWithValue("c", content);
+            await cmd.ExecuteNonQueryAsync();
         }
     }
 }
