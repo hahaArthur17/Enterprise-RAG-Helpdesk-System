@@ -1,7 +1,9 @@
 import os
 import time
 import logging
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, Request, HTTPException, UploadFile, File
+import io
+from pypdf import PdfReader
 from pydantic import BaseModel
 from dotenv import load_dotenv
 
@@ -140,6 +142,54 @@ def ingest_knowledge(request: IngestRequest):
         logger.error(f"Error during ingestion process: {str(e)}")
         raise HTTPException(status_code=500, detail="Failed to embed and store data.")
 
+# [DAY 10]: Upload & Parse PDF
+@app.post("/upload", response_model=IngestResponse)
+async def upload_document(file: UploadFile = File(...)):
+    """
+    Receives a PDF file, extracts text, converts to vector, and stores in Supabase.
+    """
+    logger.info(f"Received file: {file.filename}")
+    
+    if not file.filename.endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Only PDF files are supported.")
+
+    try:
+        # 1. Read the PDF file in memory
+        pdf_bytes = await file.read()
+        pdf_reader = PdfReader(io.BytesIO(pdf_bytes))
+        
+        # 2. Extract text from all pages
+        extracted_text = ""
+        for page in pdf_reader.pages:
+            text = page.extract_text()
+            if text:
+                extracted_text += text + "\n"
+                
+        if not extracted_text.strip():
+            raise HTTPException(status_code=400, detail="No readable text found in PDF.")
+
+        # 3. Simple chunking (In production, use LangChain's RecursiveCharacterTextSplitter)
+        # For Day 10, we embed the whole extracted text (up to model limit)
+        logger.info("Extracting text and generating embeddings...")
+        vector_embedding = embedding_model.encode(extracted_text).tolist()
+
+        # 4. Store in vector database
+        data, count = supabase.table("documents").insert({
+            "content": extracted_text,
+            "embedding": vector_embedding
+        }).execute()
+        
+        inserted_id = data[1][0]['id']
+        logger.info(f"Successfully processed PDF. Document ID: {inserted_id}")
+
+        return IngestResponse(
+            message=f"File '{file.filename}' successfully processed and stored.",
+            document_id=inserted_id
+        )
+
+    except Exception as e:
+        logger.error(f"Error processing file: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to process document.")
 
 @app.get("/health")
 async def health_check():

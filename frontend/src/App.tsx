@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import type { Message } from './types/chat';
 import './App.css';
 
@@ -10,6 +10,36 @@ function App() {
   
   // NEW: State to track if we are waiting for an API response
   const [isLoading, setIsLoading] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // [DAY 10]: Handle File Upload
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setIsUploading(true);
+    const formData = new FormData();
+    formData.append('file', file);
+
+    try {
+      // Send file to .NET Backend
+      const response = await fetch('http://localhost:5263/api/document/upload', {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (!response.ok) throw new Error("Upload failed");
+      
+      alert(`Success: ${file.name} has been processed and stored in the AI knowledge base!`);
+    } catch (error) {
+      console.error("Upload error:", error);
+      alert("Failed to upload the document.");
+    } finally {
+      setIsUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = ''; // Reset input
+    }
+  };
 
   // Changed to an async function to handle network requests
   const handleSend = async () => {
@@ -76,6 +106,20 @@ function App() {
     <div className="chat-container">
       <header className="chat-header">
         <h2>Enterprise RAG Helpdesk</h2>
+        {/* NEW: Upload Button */}
+        <div className="upload-section">
+            <input 
+              type="file" 
+              accept=".pdf" 
+              ref={fileInputRef}
+              onChange={handleFileUpload} 
+              style={{ display: 'none' }} 
+              id="file-upload"
+            />
+            <label htmlFor="file-upload" className="upload-button">
+              {isUploading ? "Uploading..." : "📎 Upload PDF"}
+            </label>
+        </div>
       </header>
 
       <div className="message-list">
