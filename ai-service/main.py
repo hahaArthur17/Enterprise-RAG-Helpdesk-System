@@ -67,43 +67,80 @@ class IngestResponse(BaseModel):
 
 # --- Endpoints ---
 
-# [DAY 8]: Ask LLM (Groq Integration)
+# [DAY 11]: The RAG Pipeline (Retrieve -> Augment -> Generate)
 @app.post("/ask", response_model=AskResponse)
 async def ask_ai(request: AskRequest):
     """
-    Takes a user question, sends it to Groq LLM (e.g., Llama 3), and returns the generated answer.
+    The core RAG endpoint.
+    1. Embed the user question.
+    2. Vector search in Supabase.
+    3. Inject context into LLM prompt.
+    4. Generate and return answer.
     """
-    logger.info(f"Received question for LLM: '{request.question}'")
+    logger.info(f"Processing RAG request for: '{request.question}'")
     
     if not request.question.strip():
         raise HTTPException(status_code=400, detail="Question cannot be empty.")
 
     try:
-        # Call Groq API using Llama-3 8B model
+        # STEP 1: Embed the user's question
+        logger.info("Embedding the user question...")
+        question_embedding = embedding_model.encode(request.question).tolist()
+
+        # STEP 2: Retrieve relevant documents from Supabase using RPC (Remote Procedure Call)
+        logger.info("Searching vector database for context...")
+        response = supabase.rpc(
+            "match_documents",
+            {
+                "query_embedding": question_embedding,
+                "match_threshold": 0.3, # Adjust threshold based on accuracy needs
+                "match_count": 3        # Top 3 most relevant chunks
+            }
+        ).execute()
+
+        retrieved_docs = response.data
+        
+        # STEP 3: Augment the Prompt (Combine context and question)
+        context_text = ""
+        if retrieved_docs:
+            logger.info(f"Found {len(retrieved_docs)} relevant context pieces.")
+            for doc in retrieved_docs:
+                context_text += f"- {doc['content']}\n"
+        else:
+            logger.info("No highly relevant context found in database.")
+            context_text = "No specific internal company context found."
+
+        # Build the dynamic System Prompt
+        system_prompt = f"""
+        You are an intelligent enterprise support assistant. 
+        Use ONLY the following retrieved Context to answer the User Question. 
+        If the answer is not contained in the Context, say "I don't have enough internal information to answer that." 
+        Do not make up facts.
+        
+        --- Context ---
+        {context_text}
+        """
+
+        # STEP 4: Generate (Call the Groq LLM)
+        logger.info("Sending augmented prompt to Groq LLM...")
         chat_completion = await groq_client.chat.completions.create(
             messages=[
-                {
-                    "role": "system",
-                    "content": "You are a helpful, professional enterprise assistant. Answer concisely."
-                },
-                {
-                    "role": "user",
-                    "content": request.question
-                }
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": request.question}
             ],
             model="llama-3.1-8b-instant", 
-            temperature=0.5,
+            temperature=0.3, # Lower temperature for more factual responses
             max_tokens=1024,
         )
         
-        # Extract the real answer from Groq
         real_answer = chat_completion.choices[0].message.content
+        logger.info("RAG pipeline completed successfully.")
         
         return AskResponse(answer=real_answer)
 
     except Exception as e:
-        logger.error(f"Error communicating with Groq API: {str(e)}")
-        raise HTTPException(status_code=500, detail="AI generation failed.")
+        logger.error(f"Error in RAG pipeline: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to generate AI response.")
 
 
 # [DAY 9]: Embed & Store (Vector Database Integration)
