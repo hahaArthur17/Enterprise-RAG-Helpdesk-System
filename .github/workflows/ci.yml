@@ -52,22 +52,10 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Create Virtual Environment and Install dependencies
+      - name: Zip the application (Source Code ONLY)
         working-directory: ./ai-service
-        run: |
-          python -m venv antenv
-          source antenv/bin/activate
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-
-      - name: Zip the application (including dependencies)
-        working-directory: ./ai-service
-        run: zip -r ../release.zip ./*
+        # 只把当前目录的代码打包，严格排除可能残存的虚拟环境和缓存
+        run: zip -r ../release.zip ./* -x "venv/*" "__pycache__/*"
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
