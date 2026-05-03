@@ -26,7 +26,8 @@ builder.Services.AddCors(options =>
         // Allow the React frontend to communicate with this API
         policy.WithOrigins("http://localhost:5173",
                 "http://localhost:3000",
-                "https://enterprise-rag-helpdesk-system-lgojuogsb.vercel.app")
+                "https://enterprise-rag-helpdesk-system-lgojuogsb.vercel.app",
+                "https://enterprise-rag-helpdesk-system.vercel.app")
               .AllowAnyHeader()
               .AllowAnyMethod();
     });
@@ -59,6 +60,7 @@ var app = builder.Build();
 // 5. Enable CORS (Must be placed before Auth)
 app.UseCors("AllowFrontend");
 
+app.UseHttpsRedirection(); 
 // 6. Enable Authentication & Authorization (Order is critical!)
 app.UseAuthentication(); // "Who are you?"
 app.UseAuthorization();  // "Are you allowed to be here?"
