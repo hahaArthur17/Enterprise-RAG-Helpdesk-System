@@ -1,7 +1,7 @@
 # backend-dotnet/BackendApi/Dockerfile
 
 # Stage 1: Build using the .NET SDK
-FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
+FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src
 
 # Copy csproj and restore as distinct layers
@@ -13,7 +13,7 @@ COPY . .
 RUN dotnet publish "BackendApi.csproj" -c Release -o /app/publish /p:UseAppHost=false
 
 # Stage 2: Run using the ASP.NET Core Runtime
-FROM mcr.microsoft.com/dotnet/aspnet:8.0 AS final
+FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS final
 WORKDIR /app
 
 # Copy the published app
