@@ -24,7 +24,9 @@ builder.Services.AddCors(options =>
     options.AddPolicy("AllowFrontend", policy =>
     {
         // Allow the React frontend to communicate with this API
-        policy.WithOrigins("http://localhost:5173")
+        policy.WithOrigins("http://localhost:5173",
+                "http://localhost:3000",
+                "https://enterprise-rag-helpdesk-system-lgojuogsb.vercel.app")
               .AllowAnyHeader()
               .AllowAnyMethod();
     });
