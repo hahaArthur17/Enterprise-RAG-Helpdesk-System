@@ -16,6 +16,7 @@ namespace BackendApi.Controllers
         private readonly IHttpClientFactory _httpClientFactory;
         private readonly ILogger<ChatController> _logger;
         private readonly string _connectionString;
+        private readonly string _pythonServiceUrl;
 
         public ChatController(IHttpClientFactory httpClientFactory, ILogger<ChatController> logger, IConfiguration configuration)
         {
@@ -23,6 +24,8 @@ namespace BackendApi.Controllers
             _logger = logger;
             _connectionString = configuration["SUPABASE_DB_CONNECTION"] 
                                 ?? throw new InvalidOperationException("DB Connection string not found in .env");
+            _pythonServiceUrl = configuration["PYTHON_SERVICE_URL"] 
+                                ?? "https://erag-ai-service-ewdsckb4aggbh3ay.australiaeast-01.azurewebsites.net";
         }
 
         [HttpPost]
@@ -44,7 +47,7 @@ namespace BackendApi.Controllers
                 var httpContent = new StringContent(jsonPayload, Encoding.UTF8, "application/json");
 
                 var client = _httpClientFactory.CreateClient();
-                var pythonResponse = await client.PostAsync("http://localhost:8000/ask", httpContent);
+                var pythonResponse = await client.PostAsync($"{_pythonServiceUrl}/ask", httpContent);
                 pythonResponse.EnsureSuccessStatusCode();
 
                 var responseString = await pythonResponse.Content.ReadAsStringAsync();

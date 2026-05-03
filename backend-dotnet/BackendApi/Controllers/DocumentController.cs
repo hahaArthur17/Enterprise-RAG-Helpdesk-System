@@ -1,6 +1,7 @@
 using System.Net.Http.Headers;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.Extensions.Configuration;
 
 namespace BackendApi.Controllers
 {
@@ -11,11 +12,14 @@ namespace BackendApi.Controllers
     {
         private readonly IHttpClientFactory _httpClientFactory;
         private readonly ILogger<DocumentController> _logger;
+        private readonly string _pythonServiceUrl;
 
-        public DocumentController(IHttpClientFactory httpClientFactory, ILogger<DocumentController> logger)
+        public DocumentController(IHttpClientFactory httpClientFactory, ILogger<DocumentController> logger, IConfiguration configuration)
         {
             _httpClientFactory = httpClientFactory;
             _logger = logger;
+            _pythonServiceUrl = configuration["PYTHON_SERVICE_URL"] 
+                                ?? "https://erag-ai-service-ewdsckb4aggbh3ay.australiaeast-01.azurewebsites.net";
         }
 
         [HttpPost("upload")]
@@ -54,7 +58,7 @@ namespace BackendApi.Controllers
                 multipartFormContent.Add(fileStreamContent, name: "file", fileName: file.FileName);
 
                 _logger.LogInformation("Forwarding file to Python AI service...");
-                var pythonResponse = await client.PostAsync("http://localhost:8000/upload", multipartFormContent);
+                var pythonResponse = await client.PostAsync($"{_pythonServiceUrl}/upload", multipartFormContent);
 
                 if (!pythonResponse.IsSuccessStatusCode)
                 {
