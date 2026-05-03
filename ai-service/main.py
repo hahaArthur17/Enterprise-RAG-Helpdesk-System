@@ -8,6 +8,7 @@ from pypdf import PdfReader
 from pydantic import BaseModel
 from dotenv import load_dotenv
 
+
 # --- Integrations ---
 from groq import AsyncGroq
 from supabase import create_client, Client
