@@ -57,11 +57,23 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install dependencies
+      - name: Create Virtual Environment and Install dependencies
         working-directory: ./ai-service
         run: |
+          python -m venv antenv
+          source antenv/bin/activate
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+
+      - name: Zip the application (including dependencies)
+        working-directory: ./ai-service
+        run: zip -r ../release.zip ./*
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-service-app
+          path: release.zip
           
   # Job 4: Mock Deployment (Runs only if all builds pass)
   deploy-backend:
@@ -89,10 +101,14 @@ jobs:
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main'
     steps:
-      - uses: actions/checkout@v4
+      - name: Download Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ai-service-app
+
       - name: Deploy to Azure Web App
         uses: azure/webapps-deploy@v3
         with:
           app-name: 'erag-ai-service'
           publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE_PYTHON }}
-          package: ./ai-service
+          package: release.zip
