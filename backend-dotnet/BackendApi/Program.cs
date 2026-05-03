@@ -7,6 +7,8 @@ using System.Text;
 Env.Load();
 
 var builder = WebApplication.CreateBuilder(args);
+// Connect to Azure Application Insights for telemetry monitoring
+builder.Services.AddApplicationInsightsTelemetry();
 
 // 2. Instruct .NET to read configurations from environment variables
 builder.Configuration.AddEnvironmentVariables();

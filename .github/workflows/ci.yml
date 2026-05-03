@@ -64,13 +64,35 @@ jobs:
           pip install -r requirements.txt
           
   # Job 4: Mock Deployment (Runs only if all builds pass)
-  deploy:
-    needs: [build-frontend, build-backend, build-ai-service]
+  deploy-backend:
+    needs: build-backend
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main'
     steps:
-      - name: Mock Deploy to Production
-        run: |
-          echo "All tests passed. Initiating deployment sequence..."
-          echo "Deploying Docker containers to AWS/Azure..."
-          echo "Deployment successful! 🚀"
+      - uses: actions/checkout@v4
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Build and Publish
+        working-directory: ./backend-dotnet/BackendApi
+        run: dotnet publish -c Release -o ./publish
+      - name: Deploy to Azure Web App
+        uses: azure/webapps-deploy@v3
+        with:
+          app-name: 'erag-backend-api'
+          publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE_DOTNET }}
+          package: ./backend-dotnet/BackendApi/publish
+
+  deploy-ai-service:
+    needs: build-ai-service
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Deploy to Azure Web App
+        uses: azure/webapps-deploy@v3
+        with:
+          app-name: 'erag-ai-service'
+          publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE_PYTHON }}
+          package: ./ai-service

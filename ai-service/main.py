@@ -1,4 +1,5 @@
 import os
+import sys
 import time
 import logging
 from fastapi import FastAPI, Request, HTTPException, UploadFile, File
@@ -14,7 +15,10 @@ from sentence_transformers import SentenceTransformer
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 # 1. Setup Logging and Environment
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+logging.basicConfig(
+    level=logging.INFO, 
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", 
+    handlers=[logging.StreamHandler(sys.stdout)])
 logger = logging.getLogger("ai-service")
 
 # Load environment variables from .env file
