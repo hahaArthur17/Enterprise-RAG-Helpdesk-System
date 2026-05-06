@@ -1,86 +1,151 @@
-Enterprise RAG Helpdesk System
+# Enterprise AI Helpdesk
 
-An AI-empowered full-stack knowledge base assistant designed for enterprise internal use.
-This project demonstrates a modern microservices architecture, integrating a React frontend, a robust .NET Web API for business logic, and a Python FastAPI service for AI/RAG capabilities.
+An enterprise-ready AI helpdesk platform built with a decoupled full-stack architecture. The system uses Retrieval-Augmented Generation (RAG) to answer user questions from internal documents, provide source citations, and stream responses in real time.
 
-🏗 Architecture Diagram
+The project is designed to demonstrate a production-oriented AI application architecture, combining a React frontend, an ASP.NET Core backend-for-frontend, a Python AI microservice, Groq-powered LLM inference, and Supabase pgvector for semantic search.
 
-The system follows a standard Backend-for-Frontend (BFF) microservices architecture.
+## Key Features
 
-Diagram
-graph LR
-    User([User])
-    UI[Frontend \n React + TypeScript]
-    NET_API[Backend API \n .NET Core]
-    PY_API[AI Microservice \n Python FastAPI]
-    
-    DB[(PostgreSQL + pgvector)]
-    LLM((Azure OpenAI))
+- RAG-based question answering over uploaded documents
+- PDF, Markdown, and plain text document ingestion
+- Recursive text chunking to preserve semantic context
+- Vector similarity search with Supabase PostgreSQL and pgvector
+- Groq LPU inference with Llama 3 for low-latency responses
+- Streaming chat responses for a real-time typewriter experience
+- Source citations linked to the retrieved document fragments
+- Enterprise-focused API layer for authentication, rate limiting, audit logging, and service orchestration
+- Fully containerized local development with Docker Compose
 
-    User -- Interacts with --> UI
-    UI -- HTTP POST /api/chat --> NET_API
-    NET_API -- HTTP POST /ask --> PY_API
-    
-    PY_API -. Embeddings & Search .-> DB
-    PY_API -. Prompt & Generate .-> LLM
-    
-    classDef frontend fill:#61dafb,stroke:#333,stroke-width:2px,color:#000;
-    classDef dotnet fill:#512bd4,stroke:#333,stroke-width:2px,color:#fff;
-    classDef python fill:#ffd43b,stroke:#333,stroke-width:2px,color:#000;
-    classDef future fill:#e9ecef,stroke:#999,stroke-width:2px,stroke-dasharray: 5 5,color:#666;
+## Architecture Overview
 
-    class UI frontend;
-    class NET_API dotnet;
-    class PY_API python;
-    class DB,LLM future;
+```text
+User
+  |
+  v
+React Frontend
+  |
+  v
+ASP.NET Core BFF / Backend API
+  |
+  v
+Python FastAPI AI Microservice
+  |
+  +--> Groq API / Llama 3
+  |
+  +--> Supabase PostgreSQL + pgvector
+```
 
-🛠 Tech Stack
-Frontend (User Interface)
-React 18 – Component-based UI rendering
-TypeScript – Strong typing for stability and maintainability
-Vite – Fast development and build tooling
-Backend (.NET BFF - Backend for Frontend)
-C# & ASP.NET Core Web API – Handles routing, validation, and orchestration
-IHttpClientFactory – Manages resilient HTTP connections
-ILogger (Structured Logging) – Tracks request flows and errors
-AI Microservice (Python)
-Python 3 – Core language for AI and data processing
-FastAPI – High-performance asynchronous framework
-Pydantic – Data validation and configuration management
-🚀 Getting Started (Local Development)
+## Tech Stack
 
-Run the three services in separate terminals:
+| Layer | Technologies |
+|---|---|
+| Frontend | React 18, TypeScript, Vite, Tailwind CSS |
+| Backend API / BFF | ASP.NET Core 8, C#, `IHttpClientFactory`, structured logging |
+| AI Microservice | Python 3.10+, FastAPI, LangChain |
+| LLM Inference | Groq LPU, Llama 3 |
+| Vector Database | Supabase, PostgreSQL, pgvector |
+| DevOps | Docker, Docker Compose |
 
-1. Start the AI Service (Python)
-cd ai-service
+## Technical Decisions
 
-# Activate your virtual environment first
-# Example:
-# source venv/bin/activate
+| Component | Choice | Engineering Rationale |
+|---|---|---|
+| Inference Engine | Groq API | Groq's LPU technology provides very low-latency inference, which is important for helpdesk workflows where users expect fast responses. |
+| Vector Storage | Supabase pgvector | Supabase combines managed PostgreSQL with vector search, allowing relational business data and embeddings to be stored in one platform. |
+| Service Decoupling | .NET and Python | ASP.NET Core handles enterprise API concerns such as authentication, rate limiting, audit logging, and orchestration, while Python provides access to mature AI and ML tooling. |
+| Backend Pattern | BFF / Microservices | The BFF isolates frontend-facing API concerns from the AI microservice, allowing the AI layer to scale and evolve independently. |
+| Resilience | Polly policies in .NET | Retry and circuit breaker policies help the backend handle transient AI service failures and timeout scenarios gracefully. |
 
-pip install -r requirements.txt
-uvicorn main:app --reload --port 8000
+## RAG Pipeline
 
-2. Start the Backend API (.NET)
-cd backend-dotnet/BackendApi
-dotnet run
+### 1. Document Ingestion
 
+The ingestion pipeline supports PDF, Markdown, and plain text files. Documents are parsed, normalized, and split into smaller semantic chunks using recursive character text splitting.
 
-Runs on: http://localhost:5263
+### 2. Embedding and Storage
 
-(Check console output to confirm)
+Each document chunk is converted into a high-dimensional embedding and stored in Supabase PostgreSQL with pgvector. Metadata is stored alongside each chunk to support traceability and source citation.
 
-3. Start the Frontend (React)
-cd frontend
-npm install
-npm run dev
+### 3. Retrieval
 
+When a user asks a question, the AI service performs a cosine similarity search against the vector database to retrieve the most relevant document fragments.
 
-Visit: http://localhost:5173
+### 4. Grounded Generation
 
-📌 Notes
-Ensure all services are running simultaneously
-Backend depends on the AI service being available
-Planned future enhancements:
-PostgreSQL + pgvector integration
-Azure OpenAI for LLM-based responses
+Retrieved context is injected into a controlled system prompt before calling the LLM. This helps the assistant generate answers that are grounded in the available knowledge base instead of relying only on model memory.
+
+### 5. Streaming and Citation
+
+The generated answer is streamed back to the frontend in real time. The response includes references to the source fragments used to generate the answer.
+
+## Local Development
+
+The system is containerized with Docker Compose for consistent local development across environments.
+
+### Prerequisites
+
+- Docker
+- Docker Compose
+- Groq API key
+- Supabase project URL
+- Supabase API key
+
+### Environment Configuration
+
+Create environment configuration files for each service.
+
+For the AI service:
+
+```env
+GROQ_API_KEY=your_groq_api_key
+SUPABASE_URL=your_supabase_project_url
+SUPABASE_KEY=your_supabase_api_key
+```
+
+For the .NET backend, configure database connection strings and service settings in:
+
+```text
+backend-dotnet/.../appsettings.json
+```
+
+### Run the Full Stack
+
+From the root directory, run:
+
+```bash
+docker-compose up --build
+```
+
+### Service URLs
+
+| Service | URL |
+|---|---|
+| Frontend | `http://localhost:5173` |
+| Backend API Swagger | `http://localhost:5263/swagger` |
+| AI Service Docs | `http://localhost:8000/docs` |
+
+## Challenges and Solutions
+
+### Latency Optimization
+
+The project uses Groq LPU inference to reduce Time to First Token compared with traditional cloud-hosted LLM inference providers. This improves the perceived responsiveness of the helpdesk experience.
+
+### Environment Consistency
+
+Docker multi-stage builds are used to manage the Python AI service footprint while keeping the .NET and frontend environments reproducible across machines.
+
+### Service Reliability
+
+The .NET backend uses resilient HTTP policies, including retry and circuit breaker patterns, to handle transient AI service timeouts and prevent cascading failures.
+
+## Roadmap
+
+- [ ] Hybrid search combining BM25 keyword search with semantic search
+- [ ] Chat persistence using Redis or PostgreSQL
+- [ ] Role-based access control for enterprise knowledge bases
+- [ ] Admin dashboard for document ingestion and index management
+- [ ] Deployment migration path to Azure Container Apps
+
+## Project Purpose
+
+This project was built as a portfolio-grade full-stack AI application to demonstrate practical experience with modern frontend engineering, enterprise backend architecture, microservice design, and retrieval-augmented generation.
