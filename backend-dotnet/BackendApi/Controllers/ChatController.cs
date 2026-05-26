@@ -25,7 +25,7 @@ namespace BackendApi.Controllers
             _connectionString = configuration["SUPABASE_DB_CONNECTION"] 
                                 ?? throw new InvalidOperationException("DB Connection string not found in .env");
             _pythonServiceUrl = configuration["PYTHON_SERVICE_URL"] 
-                                ?? "https://erag-ai-service-ewdsckb4aggbh3ay.australiaeast-01.azurewebsites.net";
+                                ?? "http://127.0.0.1:8000";
         }
 
         [HttpPost]

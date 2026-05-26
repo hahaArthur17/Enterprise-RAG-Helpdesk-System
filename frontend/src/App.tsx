@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import './App.css';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5263';
@@ -95,6 +95,8 @@ function App() {
   const [inputValue, setInputValue] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
+  const [uploadJob, setUploadJob] = useState<{ id: string; filename: string; status: string } | null>(null);
+  const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -110,6 +112,13 @@ function App() {
       inputRef.current?.focus();
     }
   }, [token]);
+
+  // Cleanup polling on unmount
+  useEffect(() => {
+    return () => {
+      if (pollingRef.current) clearInterval(pollingRef.current);
+    };
+  }, []);
 
   // Handle login submission
   const handleLogin = async (e: React.FormEvent) => {
@@ -139,12 +148,38 @@ function App() {
     setMessages([]);
   };
 
+  // Poll job status
+  const pollJobStatus = useCallback((jobId: string, filename: string) => {
+    pollingRef.current = setInterval(async () => {
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/document/status/${jobId}`, {
+          headers: { 'Authorization': `Bearer ${token}` },
+        });
+        if (!res.ok) return;
+        const data = await res.json();
+        setUploadJob({ id: data.id, filename, status: data.status });
+
+        if (data.status === 'completed' || data.status === 'failed') {
+          if (pollingRef.current) clearInterval(pollingRef.current);
+          pollingRef.current = null;
+          setIsUploading(false);
+          if (fileInputRef.current) fileInputRef.current.value = '';
+          // Reset status after 5 seconds
+          setTimeout(() => setUploadJob(null), 5000);
+        }
+      } catch {
+        // ignore polling errors, will retry
+      }
+    }, 3000);
+  }, [token]);
+
   // Handle file upload
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file || !token) return;
 
     setIsUploading(true);
+    setUploadJob({ id: '', filename: file.name, status: 'uploading' });
     const formData = new FormData();
     formData.append('file', file);
 
@@ -157,16 +192,20 @@ function App() {
 
       if (response.status === 401) {
         handleLogout();
+        setIsUploading(false);
         alert('Session expired. Please log in again.');
         return;
       }
 
       if (!response.ok) throw new Error('Upload failed');
-      alert(`✅ ${file.name} uploaded successfully!`);
+
+      const data = await response.json();
+      setUploadJob({ id: data.jobId, filename: file.name, status: 'pending' });
+      pollJobStatus(data.jobId, file.name);
     } catch (error) {
       alert('❌ Failed to upload document.');
-    } finally {
       setIsUploading(false);
+      setUploadJob(null);
       if (fileInputRef.current) fileInputRef.current.value = '';
     }
   };
@@ -264,7 +303,20 @@ function App() {
               {isUploading ? (
                 <>
                   <span className="upload-spinner"></span>
-                  Uploading...
+                  {uploadJob?.status === 'uploading' && 'Uploading...'}
+                  {uploadJob?.status === 'pending' && 'Queued...'}
+                  {uploadJob?.status === 'processing' && 'Processing...'}
+                  {!uploadJob && 'Uploading...'}
+                </>
+              ) : uploadJob?.status === 'completed' ? (
+                <>
+                  <span className="upload-icon">✅</span>
+                  Done
+                </>
+              ) : uploadJob?.status === 'failed' ? (
+                <>
+                  <span className="upload-icon">❌</span>
+                  Failed
                 </>
               ) : (
                 <>

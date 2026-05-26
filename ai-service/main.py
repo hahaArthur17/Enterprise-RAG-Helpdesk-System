@@ -1,7 +1,10 @@
 import os
 import sys
 import time
+import uuid
+import asyncio
 import logging
+from datetime import datetime, timezone
 from fastapi import FastAPI, Request, HTTPException, UploadFile, File
 import io
 from pypdf import PdfReader
@@ -70,6 +73,23 @@ class IngestRequest(BaseModel):
 class IngestResponse(BaseModel):
     message: str
     document_id: int
+
+class UploadResponse(BaseModel):
+    job_id: str
+    message: str
+
+class JobStatusResponse(BaseModel):
+    id: str
+    filename: str
+    status: str
+    chunks_count: int | None = None
+    error_message: str | None = None
+    created_at: str
+    completed_at: str | None = None
+
+# --- Upload Directory ---
+UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "Uploads")
+os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 # --- Endpoints ---
 
@@ -187,52 +207,146 @@ def ingest_knowledge(request: IngestRequest):
         logger.error(f"Error during ingestion process: {str(e)}")
         raise HTTPException(status_code=500, detail="Failed to embed and store data.")
 
-# [DAY 12]: Refined Upload with Chunking
-@app.post("/upload", response_model=IngestResponse)
+# Async Upload — creates a job and returns immediately
+@app.post("/upload", response_model=UploadResponse, status_code=202)
 async def upload_document(file: UploadFile = File(...)):
     """
-    Parses PDF, splits text into sensible chunks, and embeds each chunk separately.
+    Saves the uploaded PDF and creates a processing job.
+    Returns 202 Accepted with a job_id for status polling.
     """
-    logger.info(f"Received file for chunking: {file.filename}")
-    if not file.filename.endswith(".pdf"):
+    logger.info(f"Received file: {file.filename}")
+    if not file.filename or not file.filename.endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF files are supported.")
 
     try:
-        pdf_bytes = await file.read()
-        pdf_reader = PdfReader(io.BytesIO(pdf_bytes))
-        
-        extracted_text = "".join([page.extract_text() or "" for page in pdf_reader.pages])
-        if not extracted_text.strip():
-            raise HTTPException(status_code=400, detail="No readable text found.")
+        # Save file to disk
+        file_id = str(uuid.uuid4())
+        file_path = os.path.join(UPLOAD_DIR, f"{file_id}_{file.filename}")
+        contents = await file.read()
+        with open(file_path, "wb") as f:
+            f.write(contents)
+        logger.info(f"File saved to {file_path}")
 
-        # 1. Initialize the Text Splitter
-        # chunk_size: max characters per chunk. chunk_overlap: overlap to keep context flow.
-        text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=500,
-            chunk_overlap=50,
-            separators=["\n\n", "\n", ".", " ", ""]
-        )
-        
-        # 2. Split the text into manageable chunks
-        chunks = text_splitter.split_text(extracted_text)
-        logger.info(f"Document split into {len(chunks)} chunks.")
+        # Create job record in database
+        job_id = str(uuid.uuid4())
+        supabase.table("document_jobs").insert({
+            "id": job_id,
+            "filename": file.filename,
+            "status": "pending",
+            "file_path": file_path,
+        }).execute()
 
-        # 3. Embed and store each chunk
-        for chunk in chunks:
-            vector_embedding = embedding_model.encode(chunk).tolist()
-            supabase.table("documents").insert({
-                "content": chunk,
-                "embedding": vector_embedding
-            }).execute()
+        logger.info(f"Job {job_id} created for file {file.filename}")
+        return UploadResponse(job_id=job_id, message="File uploaded. Processing in background.")
 
-        return IngestResponse(
-            message=f"File processed. Created {len(chunks)} embedded chunks.",
-            document_id=0 # 0 indicates multiple chunks were inserted
-        )
     except Exception as e:
-        logger.error(f"Error processing file: {str(e)}")
-        raise HTTPException(status_code=500, detail="Failed to process document.")
+        logger.error(f"Error creating upload job: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to create upload job.")
+
+
+# Job status endpoint for frontend polling
+@app.get("/jobs/{job_id}", response_model=JobStatusResponse)
+async def get_job_status(job_id: str):
+    """Returns the current status of a document processing job."""
+    try:
+        response = supabase.table("document_jobs").select("*").eq("id", job_id).execute()
+        if not response.data:
+            raise HTTPException(status_code=404, detail="Job not found.")
+
+        job = response.data[0]
+        return JobStatusResponse(
+            id=job["id"],
+            filename=job["filename"],
+            status=job["status"],
+            chunks_count=job.get("chunks_count"),
+            error_message=job.get("error_message"),
+            created_at=job["created_at"],
+            completed_at=job.get("completed_at"),
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching job status: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to fetch job status.")
+
+
+# --- Background Worker ---
+async def process_document_jobs():
+    """Background task that polls for pending jobs and processes them."""
+    while True:
+        try:
+            # Fetch pending jobs
+            response = supabase.table("document_jobs") \
+                .select("*") \
+                .eq("status", "pending") \
+                .order("created_at") \
+                .limit(5) \
+                .execute()
+
+            for job in response.data:
+                job_id = job["id"]
+                file_path = job["file_path"]
+                logger.info(f"Processing job {job_id}: {job['filename']}")
+
+                # Mark as processing
+                supabase.table("document_jobs") \
+                    .update({"status": "processing"}) \
+                    .eq("id", job_id) \
+                    .execute()
+
+                try:
+                    # Read and parse PDF
+                    with open(file_path, "rb") as f:
+                        pdf_bytes = f.read()
+                    pdf_reader = PdfReader(io.BytesIO(pdf_bytes))
+                    extracted_text = "".join([page.extract_text() or "" for page in pdf_reader.pages])
+
+                    if not extracted_text.strip():
+                        raise ValueError("No readable text found in PDF.")
+
+                    # Chunk the text
+                    text_splitter = RecursiveCharacterTextSplitter(
+                        chunk_size=500,
+                        chunk_overlap=50,
+                        separators=["\n\n", "\n", ".", " ", ""]
+                    )
+                    chunks = text_splitter.split_text(extracted_text)
+                    logger.info(f"Job {job_id}: {len(chunks)} chunks to embed.")
+
+                    # Embed and store each chunk
+                    for chunk in chunks:
+                        vector_embedding = embedding_model.encode(chunk).tolist()
+                        supabase.table("documents").insert({
+                            "content": chunk,
+                            "embedding": vector_embedding
+                        }).execute()
+
+                    # Mark as completed
+                    supabase.table("document_jobs").update({
+                        "status": "completed",
+                        "chunks_count": len(chunks),
+                        "completed_at": datetime.now(timezone.utc).isoformat(),
+                    }).eq("id", job_id).execute()
+                    logger.info(f"Job {job_id} completed: {len(chunks)} chunks stored.")
+
+                except Exception as e:
+                    logger.error(f"Job {job_id} failed: {str(e)}")
+                    supabase.table("document_jobs").update({
+                        "status": "failed",
+                        "error_message": str(e),
+                        "completed_at": datetime.now(timezone.utc).isoformat(),
+                    }).eq("id", job_id).execute()
+
+        except Exception as e:
+            logger.error(f"Worker poll error: {str(e)}")
+
+        await asyncio.sleep(5)
 
 @app.get("/health")
 async def health_check():
     return {"status": "Healthy", "service": "ai-service-with-groq-supabase"}
+
+@app.on_event("startup")
+async def start_background_worker():
+    asyncio.create_task(process_document_jobs())
+    logger.info("Background document processing worker started.")
