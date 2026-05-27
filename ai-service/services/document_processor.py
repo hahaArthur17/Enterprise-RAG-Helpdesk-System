@@ -1,19 +1,16 @@
 import re
 import logging
 import pdfplumber
-from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 logger = logging.getLogger("ai-service")
 
 # Try to import pytesseract for OCR; mark unavailable if not installed
 try:
     import pytesseract
-    from PIL import Image
-    import io
     OCR_AVAILABLE = True
 except ImportError:
     OCR_AVAILABLE = False
-    logger.warning("pytesseract/Pillow not installed. OCR for scanned pages will be skipped.")
+    logger.warning("pytesseract not installed. OCR for scanned pages will be skipped.")
 
 
 def _is_scanned_page(text: str) -> bool:
@@ -55,7 +52,7 @@ def _clean_text(text: str) -> str:
     lines = [line for line in lines if line.strip() not in repeated]
     text = "\n".join(lines)
 
-    # Remove garbled characters (non-printable except normal whitespace)
+    # Remove garbled characters (non-printable except normal whitespace and CJK)
     text = re.sub(r"[^\x20-\x7E\n\r\t一-鿿　-〿＀-￯]", "", text)
 
     # Collapse multiple blank lines
@@ -79,24 +76,29 @@ def _table_to_sentences(table: list[list]) -> str:
     return " ".join(sentences)
 
 
-def process_pdf(file_path: str) -> list[str]:
+def process_pdf(file_path: str, source_filename: str) -> list[dict]:
     """
-    Full PDF processing pipeline:
-    1. Open with pdfplumber (better table detection than pypdf)
-    2. Per page: extract tables -> convert to sentences
-    3. Per page: extract text -> OCR if scanned -> clean
-    4. Chunk all collected text
+    Full PDF processing pipeline.
+
+    Returns a list of page records, each containing:
+    {
+        "page_number": int,
+        "text": str,           # cleaned text (may be empty)
+        "table_texts": [str],  # table chunks as natural language
+    }
     """
-    all_chunks: list[str] = []
+    pages: list[dict] = []
 
     with pdfplumber.open(file_path) as pdf:
         for page_num, page in enumerate(pdf.pages, 1):
+            table_texts: list[str] = []
+
             # --- Table extraction ---
             tables = page.extract_tables()
             for table in tables:
                 sentence = _table_to_sentences(table)
                 if sentence:
-                    all_chunks.append(sentence)
+                    table_texts.append(sentence)
                     logger.info(f"Page {page_num}: extracted table as chunk")
 
             # --- Text extraction ---
@@ -114,15 +116,17 @@ def process_pdf(file_path: str) -> list[str]:
             # Clean the text
             text = _clean_text(text)
 
-            if text.strip():
-                # Use a temporary list to chunk this page's text
-                splitter = RecursiveCharacterTextSplitter(
-                    chunk_size=500,
-                    chunk_overlap=50,
-                    separators=["\n\n", "\n", ".", " ", ""]
-                )
-                page_chunks = splitter.split_text(text)
-                all_chunks.extend(page_chunks)
+            pages.append(
+                {
+                    "page_number": page_num,
+                    "text": text,
+                    "table_texts": table_texts,
+                }
+            )
 
-    logger.info(f"Document processed: {len(all_chunks)} total chunks")
-    return all_chunks
+    total_tables = sum(len(p["table_texts"]) for p in pages)
+    logger.info(
+        f"Document '{source_filename}' processed: "
+        f"{len(pages)} pages, {total_tables} table chunks"
+    )
+    return pages
