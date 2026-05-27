@@ -22,6 +22,7 @@ Python FastAPI AI Service
 ## Key Features
 
 - **Async PDF Processing** — Upload returns immediately (HTTP 202); a background worker handles parsing, chunking, embedding, and storage
+- **Concurrent Processing** — Multiple jobs and pages processed in parallel via asyncio; batch embedding for throughput
 - **Enhanced PDF Pipeline** — pdfplumber for table extraction, OCR support for scanned pages (Tesseract), regex-based text cleaning
 - **Parent-Child Indexing** — Large parent chunks for context, small child chunks for precise vector retrieval; dedup prevents repeated content
 - **RAG Question Answering** — Vector similarity search via pgvector, context-augmented LLM generation via Groq with source citations
@@ -85,8 +86,8 @@ Enterprise-RAG-Helpdesk-System/
 | `services/clients.py` | Initialize external clients (Groq, Supabase, SentenceTransformer) |
 | `services/chunker.py` | Parent-child text splitting: 800-char parents for context, 200-char children for retrieval |
 | `services/document_processor.py` | PDF pipeline: pdfplumber parsing, table-to-sentence conversion, OCR fallback, text cleaning |
-| `services/rag.py` | RAG pipeline: embed question -> vector search -> dedup -> build prompt with sources -> LLM generation |
-| `services/worker.py` | Background worker: polls `document_jobs` table, processes pending PDFs |
+| `services/rag.py` | RAG pipeline: embed question (thread pool) -> vector search -> dedup -> build prompt with sources -> LLM generation |
+| `services/worker.py` | Background worker: concurrent job/page processing, batch embedding, thread pool for CPU-bound work |
 | `routers/ask.py` | `POST /ask` — RAG question answering |
 | `routers/ingest.py` | `POST /ingest` — direct text embedding |
 | `routers/upload.py` | `POST /upload` (202 async), `GET /jobs/{id}` (status polling) |
@@ -98,16 +99,20 @@ Enterprise-RAG-Helpdesk-System/
 1. User uploads PDF
 2. POST /upload -> save file -> insert job (status=pending) -> return 202 + job_id
 3. Frontend polls GET /jobs/{job_id} every 3 seconds
-4. Background worker picks up pending job -> status=processing
-5. Worker per page:
-   a. Extract tables -> convert to sentences -> store as parent documents
-   b. Extract text -> OCR if scanned -> clean -> parent-child split
-   c. Insert parent_documents -> embed child chunks -> insert documents with parent_id
-6. Worker: status=completed (or failed with error_message)
-7. Frontend sees "completed" -> stops polling
+4. Background worker picks up pending jobs (up to 5 at once)
+5. Multiple jobs processed concurrently via asyncio.gather
+6. Within each job, all pages processed concurrently via asyncio.gather + to_thread
+7. Per page: tables and text processed, child chunks batch-embedded (single encode call)
+8. Worker: status=completed (or failed with error_message)
+9. Frontend sees "completed" -> stops polling
+
+Concurrency design:
+- asyncio.to_thread: CPU-bound work (embedding, PDF parsing) offloaded to thread pool
+- asyncio.gather: multiple jobs and pages run in parallel
+- Batch embedding: SentenceTransformer.encode(list) is faster than N single calls
 
 RAG query flow:
-1. Embed user question -> vector search on child chunks (precise match)
+1. Embed user question (thread pool) -> vector search on child chunks
 2. SQL JOIN returns parent content (full context) automatically
 3. Deduplicate by parent prefix -> build prompt with source annotations -> LLM
 ```

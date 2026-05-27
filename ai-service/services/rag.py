@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from services.clients import embedding_model, supabase, groq_client
 
@@ -7,27 +8,32 @@ logger = logging.getLogger("ai-service")
 async def run_rag_pipeline(question: str) -> str:
     """
     Full RAG pipeline with parent-child retrieval:
-    1. Embed the user question
+    1. Embed the user question (offloaded to thread pool)
     2. Vector search on child chunks
     3. Retrieve parent content for full context (done by SQL function)
     4. Deduplicate by parent content prefix
     5. Build augmented prompt with source annotations
     6. Generate answer via Groq LLM
     """
-    # Step 1: Embed the question
+    # Step 1: Embed the question (CPU-bound, run in thread pool)
     logger.info("Embedding the user question...")
-    question_embedding = embedding_model.encode(question).tolist()
+    question_embedding = await asyncio.to_thread(
+        embedding_model.encode, question
+    )
+    question_embedding = question_embedding.tolist()
 
-    # Step 2: Vector search (match_documents now returns parent content)
+    # Step 2: Vector search (I/O-bound, Supabase SDK is sync)
     logger.info("Searching vector database for context...")
-    response = supabase.rpc(
-        "match_documents",
-        {
-            "query_embedding": question_embedding,
-            "match_threshold": 0.2,
-            "match_count": 5,
-        },
-    ).execute()
+    response = await asyncio.to_thread(
+        lambda: supabase.rpc(
+            "match_documents",
+            {
+                "query_embedding": question_embedding,
+                "match_threshold": 0.2,
+                "match_count": 5,
+            },
+        ).execute()
+    )
 
     retrieved_docs = response.data
 
@@ -39,9 +45,7 @@ async def run_rag_pipeline(question: str) -> str:
         logger.info(f"Found {len(retrieved_docs)} relevant context pieces.")
 
         for doc in retrieved_docs:
-            # content is the parent chunk (full context from SQL COALESCE)
             parent_content = doc["content"]
-            # child_content is the actual matched chunk (for debugging)
             child_content = doc.get("child_content", parent_content)
             source_file = doc.get("source_filename") or "unknown"
             section = doc.get("section_title") or ""
@@ -50,7 +54,6 @@ async def run_rag_pipeline(question: str) -> str:
             parent_id = doc.get("parent_id")
 
             # Deduplicate: same parent may be hit by multiple child chunks
-            # Use first 100 chars of content as dedup key
             content_key = parent_content[:100]
             if content_key in seen_parent_prefixes:
                 logger.debug(f"Skipping duplicate parent (sim={similarity:.3f})")
@@ -89,7 +92,7 @@ async def run_rag_pipeline(question: str) -> str:
     {context_text}
     """
 
-    # Step 4: Generate answer
+    # Step 4: Generate answer (I/O-bound, Groq client is async)
     logger.info("Sending augmented prompt to Groq LLM...")
     chat_completion = await groq_client.chat.completions.create(
         messages=[
