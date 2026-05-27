@@ -28,6 +28,8 @@ ALTER TABLE documents
 CREATE INDEX IF NOT EXISTS idx_documents_parent_id ON documents(parent_id);
 
 -- 4. Rewrite match_documents: return parent content when available
+DROP FUNCTION IF EXISTS match_documents(vector, double precision, integer);
+
 CREATE OR REPLACE FUNCTION match_documents(
     query_embedding  vector(384),
     match_threshold  float,
