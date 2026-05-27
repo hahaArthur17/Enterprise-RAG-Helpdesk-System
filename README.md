@@ -23,7 +23,8 @@ Python FastAPI AI Service
 
 - **Async PDF Processing** — Upload returns immediately (HTTP 202); a background worker handles parsing, chunking, embedding, and storage
 - **Enhanced PDF Pipeline** — pdfplumber for table extraction, OCR support for scanned pages (Tesseract), regex-based text cleaning
-- **RAG Question Answering** — Vector similarity search via pgvector, context-augmented LLM generation via Groq
+- **Parent-Child Indexing** — Large parent chunks for context, small child chunks for precise vector retrieval; dedup prevents repeated content
+- **RAG Question Answering** — Vector similarity search via pgvector, context-augmented LLM generation via Groq with source citations
 - **Job Status Polling** — Frontend polls for processing status: `pending` -> `processing` -> `completed` / `failed`
 - **JWT Authentication** — .NET backend handles auth; all API calls require Bearer token
 - **Docker Compose** — Full stack containerized for local development
@@ -63,13 +64,15 @@ Enterprise-RAG-Helpdesk-System/
 │   │   └── upload.py            # POST /upload, GET /jobs/{id}
 │   ├── services/
 │   │   ├── clients.py           # Groq, Supabase, embedding model init
+│   │   ├── chunker.py           # Parent-child text splitting logic
 │   │   ├── document_processor.py# PDF parsing, table extraction, OCR, cleaning
 │   │   ├── rag.py               # RAG pipeline logic
 │   │   └── worker.py            # Background job processor
 │   ├── Dockerfile
 │   └── requirements.txt
 ├── supabase/migrations/
-│   └── 001_init_schema.sql      # Full database schema
+│   ├── 001_init_schema.sql      # Base tables + vector search function
+│   └── 002_parent_child_index.sql# Parent-child indexing migration
 └── docker-compose.yml
 ```
 
@@ -80,8 +83,9 @@ Enterprise-RAG-Helpdesk-System/
 | `config.py` | Load environment variables (GROQ_API_KEY, SUPABASE_URL, SUPABASE_KEY) |
 | `models/schemas.py` | Pydantic models for all API request/response types |
 | `services/clients.py` | Initialize external clients (Groq, Supabase, SentenceTransformer) |
-| `services/document_processor.py` | PDF pipeline: pdfplumber parsing, table-to-sentence conversion, OCR fallback, text cleaning, chunking |
-| `services/rag.py` | RAG pipeline: embed question -> vector search -> build prompt -> LLM generation |
+| `services/chunker.py` | Parent-child text splitting: 800-char parents for context, 200-char children for retrieval |
+| `services/document_processor.py` | PDF pipeline: pdfplumber parsing, table-to-sentence conversion, OCR fallback, text cleaning |
+| `services/rag.py` | RAG pipeline: embed question -> vector search -> dedup -> build prompt with sources -> LLM generation |
 | `services/worker.py` | Background worker: polls `document_jobs` table, processes pending PDFs |
 | `routers/ask.py` | `POST /ask` — RAG question answering |
 | `routers/ingest.py` | `POST /ingest` — direct text embedding |
@@ -95,19 +99,44 @@ Enterprise-RAG-Helpdesk-System/
 2. POST /upload -> save file -> insert job (status=pending) -> return 202 + job_id
 3. Frontend polls GET /jobs/{job_id} every 3 seconds
 4. Background worker picks up pending job -> status=processing
-5. Worker: pdfplumber parse -> table extraction -> OCR check -> text clean -> chunk -> embed -> store
+5. Worker per page:
+   a. Extract tables -> convert to sentences -> store as parent documents
+   b. Extract text -> OCR if scanned -> clean -> parent-child split
+   c. Insert parent_documents -> embed child chunks -> insert documents with parent_id
 6. Worker: status=completed (or failed with error_message)
 7. Frontend sees "completed" -> stops polling
+
+RAG query flow:
+1. Embed user question -> vector search on child chunks (precise match)
+2. SQL JOIN returns parent content (full context) automatically
+3. Deduplicate by parent prefix -> build prompt with source annotations -> LLM
 ```
 
 ## Database Schema (Supabase)
 
 ```sql
--- Vector knowledge base
+-- Parent documents (large chunks for context, no vectors)
+CREATE TABLE parent_documents (
+    id BIGSERIAL PRIMARY KEY,
+    content TEXT NOT NULL,
+    source_filename TEXT,
+    section_title TEXT,
+    page_start INT,
+    page_end INT,
+    job_id UUID REFERENCES document_jobs(id),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Child documents (small chunks for vector search)
 CREATE TABLE documents (
     id BIGSERIAL PRIMARY KEY,
     content TEXT NOT NULL,
-    embedding VECTOR(384)
+    embedding VECTOR(384),
+    parent_id BIGINT REFERENCES parent_documents(id) ON DELETE CASCADE,
+    page_number INT,
+    chunk_index INT,
+    source_filename TEXT,
+    section_title TEXT
 );
 
 -- Async processing queue
@@ -132,7 +161,8 @@ CREATE TABLE chat_messages (
 );
 ```
 
-Full schema with vector search function: `supabase/migrations/001_init_schema.sql`
+Full schema: `supabase/migrations/001_init_schema.sql`
+Parent-child migration: `supabase/migrations/002_parent_child_index.sql`
 
 ## API Endpoints
 
